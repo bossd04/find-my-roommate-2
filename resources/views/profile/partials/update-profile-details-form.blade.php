@@ -1,0 +1,1381 @@
+<div x-data="profileFormUpdate()" class="space-y-6">
+@php
+    $displayLocation = old('location', $user->location ?? optional($user->roommateProfile)->apartment_location ?? '');
+    $hobbiesForInput = '';
+    if (old('hobbies') !== null) {
+        $ho = old('hobbies');
+        $hobbiesForInput = is_array($ho) ? implode(', ', array_filter($ho)) : (string) $ho;
+    } elseif (!empty($user->hobbies)) {
+        $rawH = $user->hobbies;
+        $decH = is_string($rawH) ? json_decode($rawH, true) : $rawH;
+        $hobbiesForInput = is_array($decH) ? implode(', ', $decH) : (string) $rawH;
+    }
+    $tagsForInput = '';
+    if (old('lifestyle_tags') !== null) {
+        $to = old('lifestyle_tags');
+        $tagsForInput = is_array($to) ? implode(', ', array_filter($to)) : (string) $to;
+    } elseif (!empty($user->lifestyle_tags)) {
+        $rawT = $user->lifestyle_tags;
+        $decT = is_string($rawT) ? json_decode($rawT, true) : $rawT;
+        $tagsForInput = is_array($decT) ? implode(', ', $decT) : (string) $rawT;
+    }
+    $basicLocationComplete = !empty($user->location) || !empty(optional($user->roommateProfile)->apartment_location);
+    $savedUniversity = old('university', $user->university ?? '');
+    $dagupanList = $dagupanUniversities ?? [];
+    $uniInList = $savedUniversity !== '' && in_array($savedUniversity, $dagupanList, true);
+    $lifestyleComplete = $profile
+        && !empty($profile->cleanliness_level)
+        && !empty($profile->sleep_pattern)
+        && !empty($profile->study_habit)
+        && !empty($profile->noise_tolerance)
+        && $user->budget_min !== null && $user->budget_min !== ''
+        && $user->budget_max !== null && $user->budget_max !== '';
+@endphp
+
+<script>
+    function profileFormUpdate() {
+        return {
+            notifications: [],
+            showNotification(message, type = 'success') {
+                this.notifications.push({ id: Date.now(), message, type });
+                setTimeout(() => {
+                    this.notifications = this.notifications.filter(n => n.id !== this.notifications[0].id);
+                }, 3000);
+            },
+            syncEducationUniversity() {
+                const sel = document.getElementById('university_select');
+                const hidden = document.getElementById('university_hidden');
+                const other = document.getElementById('university_other');
+                if (!hidden) return;
+                if (sel && sel.value === '__other__') {
+                    hidden.value = (other && other.value ? other.value : '').trim();
+                } else if (sel && sel.value) {
+                    hidden.value = sel.value;
+                }
+            },
+            async submitForm(formId, endpoint, section) {
+                const form = document.getElementById(formId);
+                if (formId === 'education-form') {
+                    this.syncEducationUniversity();
+                }
+                const formData = new FormData(form);
+                const submitBtn = form.querySelector('button[type=submit]');
+                const originalText = submitBtn.innerHTML;
+                
+                try {
+                    submitBtn.disabled = true;
+                    submitBtn.innerHTML = '<svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-white inline-block" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Saving...';
+                    
+                    console.log(`📤 Submitting form: ${formId} to ${endpoint}`);
+                    console.log('Form data:', Object.fromEntries(formData));
+                    console.log('Form elements:', {
+                        university: form.querySelector('[name="university"]')?.value,
+                        course: form.querySelector('[name="course"]')?.value,
+                        year_level: form.querySelector('[name="year_level"]')?.value
+                    });
+                    
+                    const response = await fetch(endpoint, {
+                        method: 'POST',
+                        body: formData,
+                        headers: {
+                            'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').getAttribute('content'),
+                            'Accept': 'application/json'
+                        }
+                    });
+                    
+                    console.log('Response status:', response.status);
+                    const data = await response.json();
+                    console.log('Response data:', data);
+                    
+                    if (data.success) {
+                        this.showNotification(data.message, 'success');
+                        form.querySelectorAll('.text-red-500').forEach(el => el.remove());
+
+                        // Handle avatar upload success specifically
+                        if (formId === 'avatar-form' && data.avatar_url) {
+                            handleAvatarSuccess(data);
+                        }
+
+                        if (data.completion_percentage !== undefined) {
+                            const progressBar = document.querySelector('.bg-gradient-to-r.from-blue-500');
+                            const progressText = document.querySelector('.flex.justify-between.text-sm span:last-child');
+                            if (progressBar && progressText) {
+                                progressBar.style.width = data.completion_percentage + '%';
+                                progressText.textContent = data.completion_percentage + '%';
+                            }
+                            const sections = ['basic', 'location', 'education', 'lifestyle', 'id_verification', 'profile_photo'];
+                            sections.forEach(sectionType => {
+                                const statusElement = document.querySelector(`[data-section="${sectionType}"] .status-badge span`);
+                                if (statusElement) {
+                                    const isComplete = this.isSectionComplete(sectionType, data);
+                                    statusElement.className = isComplete ?
+                                        'profile-section-badge inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800' :
+                                        'profile-section-badge inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800';
+                                    statusElement.innerHTML = isComplete ?
+                                        '<svg class="w-3.5 h-3.5 shrink-0 text-green-600" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 0l-2 2a1 1 0 101.414 1.414L8.586 10l1.293 1.293a1 1 0 001.414 0z" clip-rule="evenodd"></path></svg><span>Complete</span>' :
+                                        '<svg class="w-3.5 h-3.5 shrink-0 text-red-600" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"></path></svg><span>Incomplete</span>';
+                                }
+                            });
+                        }
+
+                        setTimeout(() => {
+                            if (data.redirect_to_dashboard && data.dashboard_url) {
+                                window.location.href = data.dashboard_url;
+                            } else {
+                                window.location.reload();
+                            }
+                        }, data.redirect_to_dashboard ? 600 : 1500);
+                    } else {
+                        let msg = data.message || 'Something went wrong.';
+                        if (data.errors) {
+                            msg = Object.values(data.errors).flat().join(' ');
+                        }
+                        this.showNotification(msg, 'error');
+                    }
+                } catch (error) {
+                    console.error('Network error:', error);
+                    this.showNotification('Network error. Please try again.', 'error');
+                } finally {
+                    // Always reset button state
+                    console.log('🔄 Resetting button state');
+                    submitBtn.disabled = false;
+                    submitBtn.innerHTML = originalText;
+                }
+            },
+            isSectionComplete(sectionType, data) {
+                // Check if section is complete based on form data
+                switch(sectionType) {
+                    case 'basic':
+                        return data.debug_info && data.debug_info.updated_fields && 
+                               data.debug_info.updated_fields.includes('first_name') && 
+                               data.debug_info.updated_fields.includes('last_name') && 
+                               data.debug_info.updated_fields.includes('email') && 
+                               data.debug_info.updated_fields.includes('phone') && 
+                               data.debug_info.updated_fields.includes('gender') && 
+                               data.debug_info.updated_fields.includes('date_of_birth');
+                    case 'location':
+                        return data.debug_info && data.debug_info.updated_fields && 
+                               data.debug_info.updated_fields.includes('location');
+                    case 'education':
+                        return data.debug_info && data.debug_info.updated_fields && 
+                               data.debug_info.updated_fields.includes('university') && 
+                               data.debug_info.updated_fields.includes('course') && 
+                               data.debug_info.updated_fields.includes('year_level');
+                    case 'lifestyle':
+                        return data.debug_info && data.debug_info.updated_fields &&
+                               data.debug_info.updated_fields.includes('cleanliness_level') &&
+                               data.debug_info.updated_fields.includes('sleep_pattern') &&
+                               data.debug_info.updated_fields.includes('study_habit') &&
+                               data.debug_info.updated_fields.includes('noise_tolerance') &&
+                               data.debug_info.updated_fields.includes('budget_min') &&
+                               data.debug_info.updated_fields.includes('budget_max');
+                    case 'id_verification':
+                        return data.debug_info && data.debug_info.validation_id;
+                    default:
+                        return false;
+                }
+            }
+        };
+    }
+</script>
+    
+    <!-- Notifications -->
+    <div x-show="notifications.length > 0" class="fixed top-4 right-4 z-50 space-y-2">
+        <template x-for="notification in notifications" :key="notification.id">
+            <div x-transition:enter="transition ease-out duration-300"
+                 x-transition:enter-start="opacity-0 transform translate-x-full"
+                 x-transition:enter-end="opacity-100 transform translate-x-0"
+                 x-transition:leave="transition ease-in duration-200"
+                 x-transition:leave-start="opacity-100 transform translate-x-0"
+                 x-transition:leave-end="opacity-0 transform translate-x-full"
+                 class="p-4 rounded-lg shadow-lg"
+                 :class="notification.type === 'success' ? 'bg-green-500 text-white' : 'bg-red-500 text-white'">
+                <div class="flex items-center">
+                    <svg x-show="notification.type === 'success'" class="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"></path>
+                    </svg>
+                    <svg x-show="notification.type === 'error'" class="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 20 20">
+                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"></path>
+                    </svg>
+                    <span x-text="notification.message"></span>
+                </div>
+            </div>
+        </template>
+    </div>
+
+    <!-- ID Verification Section -->
+    <div class="bg-white shadow rounded-lg p-6 border-l-4 border-blue-500" data-section="id_verification">
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5">
+            <div class="flex items-center gap-3 min-w-0">
+                <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path>
+                    </svg>
+                </span>
+                <h2 class="text-lg font-semibold text-gray-900 leading-tight">ID Verification</h2>
+            </div>
+            <span class="status-badge shrink-0 self-start sm:self-center">
+                @if($user->isVerified())
+                    <span class="profile-section-badge inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                        <svg class="w-3.5 h-3.5 shrink-0 text-green-600" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 0l-2 2a1 1 0 101.414 1.414L8.586 10l1.293 1.293a1 1 0 001.414 0z" clip-rule="evenodd"></path></svg>
+                        <span>Complete</span>
+                    </span>
+                @else
+                    <span class="profile-section-badge inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                        <svg class="w-3.5 h-3.5 shrink-0 text-red-600" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"></path></svg>
+                        <span>Incomplete</span>
+                    </span>
+                @endif
+            </span>
+        </div>
+
+        <div class="mb-5 p-4 bg-blue-50 border border-blue-100 rounded-lg">
+            <p class="text-sm text-blue-900 leading-relaxed">
+                <strong class="font-semibold">Why we ask for this:</strong> ID verification helps keep the community safe by reducing fake accounts. Your document is reviewed by our team and stored securely.
+            </p>
+        </div>
+        
+        @if($user->isVerified())
+            <div class="p-4 bg-green-50 border border-green-200 rounded-md">
+                <div class="flex items-center">
+                    <svg class="w-5 h-5 text-green-500 mr-2" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 0l-2 2a1 1 0 101.414 1.414L8.586 10l1.293 1.293a1 1 0 001.414 0z" clip-rule="evenodd"></path></svg>
+                    <span class="text-green-800 font-medium">Your ID has been verified and approved.</span>
+                </div>
+            </div>
+        @else
+            <form id="id-verification-form" @submit.prevent="submitForm('id-verification-form', '/profile/update-id-verification', 'id_verification')" class="space-y-4" enctype="multipart/form-data">
+                @csrf
+                
+                <div>
+                    <label for="id_type" class="block text-sm font-medium text-gray-700">ID Type *</label>
+                    <select id="id_type" name="id_type" required
+                            class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                        <option value="">Select ID Type</option>
+                        <option value="passport" {{ $user->id_type == 'passport' ? 'selected' : '' }}>Passport</option>
+                        <option value="driver_license" {{ $user->id_type == 'driver_license' ? 'selected' : '' }}>Driver's License</option>
+                        <option value="national_id" {{ $user->id_type == 'national_id' ? 'selected' : '' }}>National ID</option>
+                        <option value="student_id" {{ $user->id_type == 'student_id' ? 'selected' : '' }}>Student ID</option>
+                        <option value="other" {{ $user->id_type == 'other' ? 'selected' : '' }}>Other</option>
+                    </select>
+                </div>
+                
+                <div>
+                    <label for="id_number" class="block text-sm font-medium text-gray-700">ID Number *</label>
+                    <input type="text" id="id_number" name="id_number" value="{{ $user->id_number ?? '' }}" required
+                           placeholder="Enter your ID number"
+                           class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                </div>
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label for="id_card_front" class="block text-sm font-medium text-gray-700">Front of ID *</label>
+                        <input type="file" id="id_card_front" name="id_card_front" required
+                               accept="image/jpeg,image/png,image/jpg"
+                               class="mt-1 block w-full text-sm text-gray-600 file:mr-4 file:rounded-md file:border-0 file:bg-blue-50 file:px-4 file:py-2 file:text-sm file:font-medium file:text-blue-700 hover:file:bg-blue-100 border border-gray-300 rounded-md shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+                        <p class="mt-1 text-sm text-gray-500">Photo page with your name and photo (JPG or PNG, max 5MB).</p>
+                    </div>
+                    <div>
+                        <label for="id_card_back" class="block text-sm font-medium text-gray-700">Back of ID *</label>
+                        <input type="file" id="id_card_back" name="id_card_back" required
+                               accept="image/jpeg,image/png,image/jpg"
+                               class="mt-1 block w-full text-sm text-gray-600 file:mr-4 file:rounded-md file:border-0 file:bg-blue-50 file:px-4 file:py-2 file:text-sm file:font-medium file:text-blue-700 hover:file:bg-blue-100 border border-gray-300 rounded-md shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+                        <p class="mt-1 text-sm text-gray-500">Reverse side or barcode strip, if applicable (JPG or PNG, max 5MB).</p>
+                    </div>
+                </div>
+                
+                <div class="flex justify-end">
+                    <button type="submit" 
+                            class="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors duration-200">
+                        <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
+                        </svg>
+                        Submit ID for Verification
+                    </button>
+                </div>
+            </form>
+        @endif
+    </div>
+
+    <!-- Profile Photo Section -->
+    <div class="bg-white shadow rounded-lg p-6 border-l-4 border-purple-500" data-section="profile_photo">
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5">
+            <div class="flex items-center gap-3 min-w-0">
+                <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-purple-50 text-purple-600">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+                    </svg>
+                </span>
+                <h2 class="text-lg font-semibold text-gray-900 leading-tight">Profile Photo</h2>
+            </div>
+            <span class="status-badge shrink-0 self-start sm:self-center">
+                @if(!empty($user->avatar))
+                    <span class="profile-section-badge inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                        <svg class="w-3.5 h-3.5 shrink-0 text-green-600" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 0l-2 2a1 1 0 101.414 1.414L8.586 10l1.293 1.293a1 1 0 001.414 0z" clip-rule="evenodd"></path></svg>
+                        <span>Complete</span>
+                    </span>
+                @else
+                    <span class="profile-section-badge inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                        <svg class="w-3.5 h-3.5 shrink-0 text-red-600" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"></path></svg>
+                        <span>Incomplete</span>
+                    </span>
+                @endif
+            </span>
+        </div>
+
+        <form id="avatar-form" @submit.prevent="submitForm('avatar-form', '/profile/avatar', 'avatar')" class="space-y-4">
+            @csrf
+            @method('POST')
+            
+            <!-- Current Avatar Display -->
+            <div class="flex items-center space-x-6">
+                <div class="shrink-0">
+                    <img id="main-avatar" class="h-24 w-24 object-cover rounded-full border-4 border-gray-200" 
+                         @if(!empty($user->avatar))
+                             src="{{ route('avatar.serve', ['filename' => $user->avatar]) }}" 
+                             alt="Current Avatar"
+                             onerror="this.src='data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iMTIiIGZpbGw9IiNGM0Y0RjYiLz4KPHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZmlsbC1ydWxlPSJldmVub2RkIiBjbGlwLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik0xNiA3YTQgNCAwIDExLTggMCA0IDQgMCAwMTggMFpNMTIgMTRhNyA3IDAgMDAtNyA3aDE0YTcgNyAwIDAwLTctN1oiIGZpbGw9IiM5Q0EzQUYiLz4KPC9zdmc+'"
+                         @else
+                             src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iMTIiIGZpbGw9IiNGM0Y0RjYiLz4KPHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZmlsbC1ydWxlPSJldmVub2RkIiBjbGlwLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik0xNiA3YTQgNCAwIDExLTggMCA0IDQgMCAwMTggMFpNMTIgMTRhNyA3IDAgMDAtNyA3aDE0YTcgNyAwIDAwLTctN1oiIGZpbGw9IiM5Q0EzQUYiLz4KPC9zdmc+"
+                             alt="Default Avatar"
+                         @endif
+                         >
+                </div>
+                <div class="flex-1">
+                    <h3 class="text-lg font-medium text-gray-900">Your Profile Photo</h3>
+                    <p class="mt-1 text-sm text-gray-500">
+                        @if(!empty($user->avatar))
+                            Your current profile photo. Upload a new one to replace it.
+                        @else
+                            Upload a profile photo to help others recognize you. This will be displayed throughout the application.
+                        @endif
+                    </p>
+                </div>
+            </div>
+            
+            <!-- Avatar Upload -->
+            <div>
+                <label for="avatar" class="block text-sm font-medium text-gray-700">Upload New Photo</label>
+                <input type="file" id="avatar" name="avatar" 
+                       accept="image/jpeg,image/png,image/jpg,image/gif,image/webp"
+                       class="mt-1 block w-full text-sm text-gray-600 file:mr-4 file:rounded-md file:border-0 file:bg-purple-50 file:px-4 file:py-2 file:text-sm file:font-medium file:text-purple-700 hover:file:bg-purple-100 border border-gray-300 rounded-md shadow-sm focus:border-purple-500 focus:ring-purple-500">
+                <p class="mt-1 text-sm text-gray-500">JPG, PNG, GIF or WebP (Max 5MB). Recommended: Square image, at least 200x200px.</p>
+            </div>
+            
+            <div class="flex justify-between items-center">
+                <div class="text-sm text-gray-600">
+                    <span id="upload-status">No file selected</span>
+                </div>
+                <div class="flex space-x-3">
+                    <button type="button" id="clear-avatar" onclick="clearAvatarSelection()" 
+                            class="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-gray-600 hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500 transition-colors duration-200">
+                        <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
+                        Clear
+                    </button>
+                    <button type="submit" 
+                            class="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors duration-200">
+                        <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path>
+                        </svg>
+                        Save Profile Photo
+                    </button>
+                </div>
+            </div>
+        </form>
+    </div>
+
+    <!-- Personal Information Section -->
+    <div class="bg-white shadow rounded-lg p-6 border-l-4 border-green-500" data-section="basic">
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5">
+            <div class="flex items-center gap-3 min-w-0">
+                <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-green-50 text-green-600">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path>
+                    </svg>
+                </span>
+                <h2 class="text-lg font-semibold text-gray-900 leading-tight">Personal Information</h2>
+            </div>
+            <span class="status-badge shrink-0 self-start sm:self-center">
+                @if(!empty($user->first_name) && !empty($user->last_name) && !empty($user->email) && !empty($user->phone) && !empty($user->gender) && !empty($user->date_of_birth) && $basicLocationComplete)
+                    <span class="profile-section-badge inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                        <svg class="w-3.5 h-3.5 shrink-0 text-green-600" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 0l-2 2a1 1 0 101.414 1.414L8.586 10l1.293 1.293a1 1 0 001.414 0z" clip-rule="evenodd"></path></svg>
+                        <span>Complete</span>
+                    </span>
+                @else
+                    <span class="profile-section-badge inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                        <svg class="w-3.5 h-3.5 shrink-0 text-red-600" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"></path></svg>
+                        <span>Incomplete</span>
+                    </span>
+                @endif
+            </span>
+        </div>
+
+        <form id="personal-form" @submit.prevent="submitForm('personal-form', '/profile/update-basic-information', 'basic_information')" class="space-y-4">
+            @csrf
+            
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label for="first_name" class="block text-sm font-medium text-gray-700">First Name *</label>
+                    <input type="text" id="first_name" name="first_name" value="{{ $user->first_name ?? '' }}" required
+                           class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                </div>
+                
+                <div>
+                    <label for="last_name" class="block text-sm font-medium text-gray-700">Last Name *</label>
+                    <input type="text" id="last_name" name="last_name" value="{{ $user->last_name ?? '' }}" required
+                           class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                </div>
+            </div>
+            
+            <div>
+                <label for="email" class="block text-sm font-medium text-gray-700">Email Address *</label>
+                <input type="email" id="email" name="email" value="{{ $user->email ?? '' }}" required
+                       class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+            </div>
+            
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label for="phone" class="block text-sm font-medium text-gray-700">Phone Number *</label>
+                    <input type="tel" id="phone" name="phone" value="{{ $user->phone ?? '' }}" required
+                           class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                </div>
+                
+                <div>
+                    <label for="basic_location" class="block text-sm font-medium text-gray-700">Location *</label>
+                    <input type="text" id="basic_location" name="location" value="{{ $displayLocation }}" required
+                           class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm @if(!$basicLocationComplete) ring-2 ring-amber-200 border-amber-300 @endif"
+                           placeholder="City, province, or area">
+                    @if(!$basicLocationComplete)
+                        <p class="mt-1 text-xs text-amber-700">Please add your location so we can show this section as complete.</p>
+                    @endif
+                </div>
+            </div>
+            
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label for="gender" class="block text-sm font-medium text-gray-700">Gender</label>
+                    <select id="gender" name="gender" required
+                            class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                        <option value="">Select Gender</option>
+                        <option value="male" {{ ($user->gender ?? '') == 'male' ? 'selected' : '' }}>Male</option>
+                        <option value="female" {{ ($user->gender ?? '') == 'female' ? 'selected' : '' }}>Female</option>
+                        <option value="other" {{ ($user->gender ?? '') == 'other' ? 'selected' : '' }}>Other</option>
+                        <option value="prefer_not_to_say" {{ ($user->gender ?? '') == 'prefer_not_to_say' ? 'selected' : '' }}>Prefer not to say</option>
+                    </select>
+                </div>
+                
+                <div>
+                    <label for="date_of_birth" class="block text-sm font-medium text-gray-700">Date of Birth *</label>
+                    <input type="date" id="date_of_birth" name="date_of_birth" 
+                           value="{{ optional($user->date_of_birth)->format('Y-m-d') ?? '' }}" 
+                           min="1920-01-01" 
+                           max="{{ now()->subYears(18)->format('Y-m-d') }}" required
+                           class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                    <p class="text-xs text-gray-500 mt-1">Age will be calculated automatically (Must be 18+ years old)</p>
+                </div>
+            </div>
+            
+            <div>
+                <label for="bio" class="block text-sm font-medium text-gray-700">Bio</label>
+                <textarea id="bio" name="bio" rows="3" 
+                          class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">{{ $user->bio ?? '' }}</textarea>
+                <p class="mt-1 text-sm text-gray-500">Tell us about yourself (max 1000 characters)</p>
+            </div>
+            
+            <div class="flex justify-end">
+                <button type="submit" 
+                        class="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition-colors duration-200">
+                    <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                    </svg>
+                    Save Basic Information
+                </button>
+            </div>
+        </form>
+    </div>
+
+    <!-- Location Information Section -->
+    <div class="bg-white shadow rounded-lg p-6 border-l-4 border-purple-500" data-section="location">
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5">
+            <div class="flex items-center gap-3 min-w-0">
+                <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-purple-50 text-purple-600">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"></path>
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                    </svg>
+                </span>
+                <h2 class="text-lg font-semibold text-gray-900 leading-tight">Location Information</h2>
+            </div>
+            <span class="status-badge shrink-0 self-start sm:self-center">
+                @if($basicLocationComplete)
+                    <span class="profile-section-badge inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                        <svg class="w-3.5 h-3.5 shrink-0 text-green-600" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 0l-2 2a1 1 0 101.414 1.414L8.586 10l1.293 1.293a1 1 0 001.414 0z" clip-rule="evenodd"></path></svg>
+                        <span>Complete</span>
+                    </span>
+                @else
+                    <span class="profile-section-badge inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                        <svg class="w-3.5 h-3.5 shrink-0 text-red-600" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"></path></svg>
+                        <span>Incomplete</span>
+                    </span>
+                @endif
+            </span>
+        </div>
+
+        <form id="location-information-form" @submit.prevent="submitForm('location-information-form', '/profile/update-location-information', 'location_information')" class="space-y-4">
+            @csrf
+            
+            <div>
+                <label for="housing_location" class="block text-sm font-medium text-gray-700">Current Location *</label>
+                <input type="text" id="housing_location" name="location" value="{{ $displayLocation }}" required
+                       placeholder="Enter your city and province (e.g., Dagupan City, Pangasinan)"
+                       class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm @if(!$basicLocationComplete) ring-2 ring-amber-200 border-amber-300 @endif">
+                <p class="mt-1 text-sm text-gray-500">This helps us find roommates near you</p>
+            </div>
+            
+            <div>
+                <label for="move_in_date" class="block text-sm font-medium text-gray-700">Preferred Move-in Date (Optional)</label>
+                <input type="date" id="move_in_date" name="move_in_date" 
+                       value="{{ $user->roommateProfile?->move_in_date ? \Carbon\Carbon::parse($user->roommateProfile->move_in_date)->format('Y-m-d') : '' }}" 
+                       min="{{ now()->format('Y-m-d') }}"
+                       class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                <p class="mt-1 text-sm text-gray-500">When are you planning to move?</p>
+            </div>
+            
+            <div class="flex justify-end">
+                <button type="submit" 
+                        class="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors duration-200">
+                    <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"></path>
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                    </svg>
+                    Save Location Information
+                </button>
+            </div>
+        </form>
+    </div>
+
+    <!-- Education Information Section -->
+    <div class="bg-white shadow rounded-lg p-6 border-l-4 border-yellow-500" data-section="education">
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5">
+            <div class="flex items-center gap-3 min-w-0">
+                <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-yellow-50 text-yellow-600">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path>
+                    </svg>
+                </span>
+                <h2 class="text-lg font-semibold text-gray-900 leading-tight">Education Information</h2>
+            </div>
+            <span class="status-badge shrink-0 self-start sm:self-center">
+                @if(!empty($user->university) && !empty($user->course) && !empty($user->year_level))
+                    <span class="profile-section-badge inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                        <svg class="w-3.5 h-3.5 shrink-0 text-green-600" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 0l-2 2a1 1 0 101.414 1.414L8.586 10l1.293 1.293a1 1 0 001.414 0z" clip-rule="evenodd"></path></svg>
+                        <span>Complete</span>
+                    </span>
+                @else
+                    <span class="profile-section-badge inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                        <svg class="w-3.5 h-3.5 shrink-0 text-red-600" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"></path></svg>
+                        <span>Incomplete</span>
+                    </span>
+                @endif
+            </span>
+        </div>
+
+        <form id="education-form" @submit.prevent="submitForm('education-form', '/profile/update-education', 'education')" class="space-y-4">
+            @csrf
+
+            <input type="hidden" name="university" id="university_hidden" value="{{ $savedUniversity }}">
+            
+            <div>
+                <label for="university_select" class="block text-sm font-medium text-gray-700">University *</label>
+                <select id="university_select" required
+                        class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                    <option value="">Select university</option>
+                    <option value="Universidad de Dagupan" @selected($savedUniversity === 'Universidad de Dagupan')>Universidad de Dagupan</option>
+                    <option value="University of Pangasinan" @selected($savedUniversity === 'University of Pangasinan')>University of Pangasinan</option>
+                    <option value="University of Luzon" @selected($savedUniversity === 'University of Luzon')>University of Luzon</option>
+                    <option value="STI College" @selected($savedUniversity === 'STI College')>STI College</option>
+                    <option value="Lyceum Northwestern University" @selected($savedUniversity === 'Lyceum Northwestern University')>Lyceum Northwestern University</option>
+                    <option value="__other__" @selected($savedUniversity !== '' && !$uniInList)>Other (specify)</option>
+                </select>
+                <div id="university_other_wrap" class="mt-2 {{ ($savedUniversity !== '' && !$uniInList) ? '' : 'hidden' }}">
+                    <label for="university_other" class="block text-sm font-medium text-gray-700">University name</label>
+                    <input type="text" id="university_other" value="{{ $uniInList ? '' : $savedUniversity }}"
+                           placeholder="Enter your school name"
+                           class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                </div>
+                <p class="mt-1 text-sm text-gray-500">Choose your university from the list or use Other if not listed.</p>
+            </div>
+            
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label for="department_id" class="block text-sm font-medium text-gray-700">Department / college</label>
+                    <select id="department_id" name="department_id"
+                            class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                        <option value="">Select department</option>
+                        @foreach(($departments ?? collect()) as $dept)
+                            <option value="{{ $dept->id }}" @selected((string)($initialDepartmentId ?? '') === (string)$dept->id)>{{ $dept->name }}</option>
+                        @endforeach
+                    </select>
+                    <p class="mt-1 text-xs text-gray-500">Courses load from the list linked to this department.</p>
+                </div>
+                <div>
+                    <label for="course" class="block text-sm font-medium text-gray-700">Course *</label>
+                    <select id="course" name="course" required
+                            class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                        <option value="">Select course</option>
+                        @if($user->course && !$initialDepartmentId)
+                            <option value="{{ $user->course }}" selected>{{ $user->course }} (saved)</option>
+                        @endif
+                    </select>
+                </div>
+            </div>
+            
+            <div>
+                <label for="year_level" class="block text-sm font-medium text-gray-700">Year Level *</label>
+                <select id="year_level" name="year_level" required
+                        class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                    <option value="">Select Year Level</option>
+                    <option value="1st Year" {{ ($user->year_level ?? '') == '1st Year' ? 'selected' : '' }}>1st Year</option>
+                    <option value="2nd Year" {{ ($user->year_level ?? '') == '2nd Year' ? 'selected' : '' }}>2nd Year</option>
+                    <option value="3rd Year" {{ ($user->year_level ?? '') == '3rd Year' ? 'selected' : '' }}>3rd Year</option>
+                    <option value="4th Year" {{ ($user->year_level ?? '') == '4th Year' ? 'selected' : '' }}>4th Year</option>
+                    <option value="5th Year" {{ ($user->year_level ?? '') == '5th Year' ? 'selected' : '' }}>5th Year</option>
+                    <option value="Graduate" {{ ($user->year_level ?? '') == 'Graduate' ? 'selected' : '' }}>Graduate</option>
+                </select>
+            </div>
+            
+            <div class="flex justify-end">
+                <button type="submit" 
+                        class="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-yellow-600 hover:bg-yellow-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500 transition-colors duration-200">
+                    <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path>
+                    </svg>
+                    Save Education Information
+                </button>
+            </div>
+        </form>
+        <script>
+        (function () {
+            const uniSel = document.getElementById('university_select');
+            const uniOtherWrap = document.getElementById('university_other_wrap');
+            const uniOther = document.getElementById('university_other');
+            
+            function syncUniOtherVisibility() {
+                if (!uniSel || !uniOtherWrap) return;
+                if (uniSel.value === '__other__') {
+                    uniOtherWrap.classList.remove('hidden');
+                    uniOther?.setAttribute('required', 'required');
+                } else {
+                    uniOtherWrap.classList.add('hidden');
+                    uniOther?.removeAttribute('required');
+                }
+            }
+            uniSel?.addEventListener('change', syncUniOtherVisibility);
+            syncUniOtherVisibility();
+
+            const deptSelect = document.getElementById('department_id');
+            const courseSelect = document.getElementById('course');
+            if (!deptSelect || !courseSelect) return;
+
+            const initialDeptId = @json($initialDepartmentId ?? null);
+            const initialCourse = @json(old('course', $user->course ?? ''));
+
+            // University-Department-Course mapping
+            const universityData = {
+                'Universidad de Dagupan': {
+                    departments: [
+                        { id: 1, name: 'School of Arts and Sciences', courses: ['Bachelor of Arts in Communication', 'Bachelor of Arts in Political Science', 'Bachelor of Arts in Psychology', 'Bachelor of Science in Social Work', 'Bachelor of Arts in English', 'Bachelor of Science in Biology', 'Bachelor of Arts in History', 'Bachelor of Science in Chemistry'] },
+                        { id: 2, name: 'School of Business Administration', courses: ['Bachelor of Science in Business Administration', 'Bachelor of Science in Accountancy', 'Bachelor of Science in Management', 'Bachelor of Science in Marketing', 'Bachelor of Science in Finance', 'Bachelor of Science in Economics'] },
+                        { id: 3, name: 'School of Education', courses: ['Bachelor of Elementary Education', 'Bachelor of Secondary Education', 'Bachelor of Physical Education', 'Bachelor of Technical Education', 'Bachelor of Special Education', 'Bachelor of Early Childhood Education'] },
+                        { id: 4, name: 'School of Engineering', courses: ['Bachelor of Science in Civil Engineering', 'Bachelor of Science in Computer Engineering', 'Bachelor of Science in Electrical Engineering', 'Bachelor of Science in Mechanical Engineering', 'Bachelor of Science in Industrial Engineering', 'Bachelor of Science in Chemical Engineering'] },
+                        { id: 5, name: 'School of Nursing', courses: ['Bachelor of Science in Nursing'] },
+                        { id: 6, name: 'School of Pharmacy', courses: ['Bachelor of Science in Pharmacy'] },
+                        { id: 7, name: 'School of Medical Technology', courses: ['Bachelor of Science in Medical Technology'] },
+                        { id: 8, name: 'School of Architecture', courses: ['Bachelor of Science in Architecture'] },
+                        { id: 9, name: 'School of Fine Arts', courses: ['Bachelor of Fine Arts', 'Bachelor of Arts in Visual Arts'] },
+                        { id: 10, name: 'School of Law', courses: ['Bachelor of Laws', 'Juris Doctor'] },
+                        { id: 11, name: 'School of Hospitality Management', courses: ['Bachelor of Science in Hospitality Management', 'Bachelor of Arts in Tourism'] },
+                        { id: 12, name: 'School of Information Technology', courses: ['Bachelor of Science in Information Technology', 'Bachelor of Science in Computer Science', 'Bachelor of Science in Information Systems'] },
+                        { id: 13, name: 'School of Medicine', courses: ['Doctor of Medicine', 'Bachelor of Science in Nursing'] },
+                        { id: 14, name: 'School of Dentistry', courses: ['Doctor of Dental Medicine'] },
+                        { id: 15, name: 'School of Public Health', courses: ['Bachelor of Science in Public Health', 'Bachelor of Science in Environmental Health'] },
+                        { id: 16, name: 'School of Social Work', courses: ['Bachelor of Science in Social Work', 'Master of Social Work'] },
+                        { id: 17, name: 'School of Criminology', courses: ['Bachelor of Science in Criminology', 'Bachelor of Science in Forensic Science'] },
+                        { id: 18, name: 'School of Maritime Education', courses: ['Bachelor of Science in Marine Transportation', 'Bachelor of Science in Marine Engineering'] },
+                        { id: 19, name: 'School of Agriculture', courses: ['Bachelor of Science in Agriculture', 'Bachelor of Science in Agricultural Engineering'] },
+                        { id: 20, name: 'School of Psychology', courses: ['Bachelor of Arts in Psychology', 'Bachelor of Science in Psychology', 'Master of Arts in Psychology'] }
+                    ]
+                },
+                'University of Pangasinan': {
+                    departments: [
+                        { id: 8, name: 'College of Information Technology', courses: ['Bachelor of Science in Information Technology', 'Bachelor of Science in Computer Science', 'Bachelor of Science in Information Systems', 'Bachelor of Science in Computer Engineering'] },
+                        { id: 9, name: 'College of Nursing', courses: ['Bachelor of Science in Nursing'] },
+                        { id: 10, name: 'College of Pharmacy', courses: ['Bachelor of Science in Pharmacy'] },
+                        { id: 11, name: 'College of Tourism', courses: ['Bachelor of Science in Tourism Management', 'Bachelor of Science in Hospitality Management', 'Bachelor of Arts in Tourism'] },
+                        { id: 12, name: 'College of Business', courses: ['Bachelor of Science in Business Administration', 'Bachelor of Science in Accountancy', 'Bachelor of Science in Entrepreneurship'] },
+                        { id: 13, name: 'College of Arts and Sciences', courses: ['Bachelor of Arts in Mass Communication', 'Bachelor of Arts in Psychology', 'Bachelor of Science in Biology', 'Bachelor of Arts in English'] }
+                    ]
+                },
+                'University of Luzon': {
+                    departments: [
+                        { id: 14, name: 'College of Law', courses: ['Bachelor of Laws', 'Juris Doctor'] },
+                        { id: 15, name: 'College of Criminology', courses: ['Bachelor of Science in Criminology', 'Bachelor of Science in Forensic Science'] },
+                        { id: 16, name: 'College of Maritime Education', courses: ['Bachelor of Science in Marine Transportation', 'Bachelor of Science in Marine Engineering', 'Bachelor of Science in Customs Administration'] },
+                        { id: 17, name: 'College of Engineering', courses: ['Bachelor of Science in Civil Engineering', 'Bachelor of Science in Computer Engineering', 'Bachelor of Science in Electrical Engineering'] },
+                        { id: 18, name: 'College of Business Administration', courses: ['Bachelor of Science in Business Administration', 'Bachelor of Science in Accountancy', 'Bachelor of Science in Management'] }
+                    ]
+                },
+                'STI College': {
+                    departments: [
+                        { id: 19, name: 'School of Computer Studies', courses: ['Bachelor of Science in Computer Science', 'Bachelor of Science in Information Technology', 'Associate in Computer Technology', 'Bachelor of Science in Information Systems'] },
+                        { id: 20, name: 'School of Business', courses: ['Bachelor of Science in Business Administration', 'Bachelor of Science in Accountancy', 'Bachelor of Science in Entrepreneurship', 'Bachelor of Science in Marketing'] },
+                        { id: 21, name: 'School of Arts and Sciences', courses: ['Bachelor of Arts in Mass Communication', 'Bachelor of Arts in Psychology', 'Bachelor of Arts in English'] },
+                        { id: 22, name: 'School of Engineering', courses: ['Bachelor of Science in Computer Engineering', 'Bachelor of Science in Electronics Engineering'] },
+                        { id: 23, name: 'School of Hospitality Management', courses: ['Bachelor of Science in Hospitality Management', 'Bachelor of Arts in Tourism'] }
+                    ]
+                },
+                'Lyceum Northwestern University': {
+                    departments: [
+                        { id: 24, name: 'College of Medicine', courses: ['Doctor of Medicine'] },
+                        { id: 25, name: 'College of Nursing', courses: ['Bachelor of Science in Nursing'] },
+                        { id: 26, name: 'College of Engineering', courses: ['Bachelor of Science in Computer Engineering', 'Bachelor of Science in Electronics Engineering', 'Bachelor of Science in Civil Engineering'] },
+                        { id: 27, name: 'College of Law', courses: ['Bachelor of Laws', 'Juris Doctor'] },
+                        { id: 28, name: 'College of Business Administration', courses: ['Bachelor of Science in Business Administration', 'Bachelor of Science in Accountancy', 'Bachelor of Science in Management'] },
+                        { id: 29, name: 'College of Arts and Sciences', courses: ['Bachelor of Arts in Mass Communication', 'Bachelor of Arts in Psychology', 'Bachelor of Science in Biology'] },
+                        { id: 30, name: 'College of Pharmacy', courses: ['Bachelor of Science in Pharmacy'] },
+                        { id: 31, name: 'College of Medical Technology', courses: ['Bachelor of Science in Medical Technology'] }
+                    ]
+                }
+            };
+
+            function setCourseOptions(courses, preserveName) {
+                console.log('Setting course options:', courses, 'preserve:', preserveName);
+                courseSelect.innerHTML = '<option value="">Select course</option>';
+                let found = false;
+                (courses || []).forEach(function (c) {
+                    const courseOption = document.createElement('option');
+                    courseOption.value = c;
+                    courseOption.textContent = c;
+                    if (preserveName && c === preserveName) {
+                        courseOption.selected = true;
+                        found = true;
+                    }
+                    courseSelect.appendChild(courseOption);
+                });
+                if (preserveName && preserveName !== '' && !found) {
+                    let savedCourseOption = document.createElement('option');
+                    savedCourseOption.value = preserveName;
+                    savedCourseOption.textContent = preserveName + ' (saved)';
+                    savedCourseOption.selected = true;
+                    courseSelect.appendChild(savedCourseOption);
+                }
+            }
+
+            function updateDepartments(university) {
+                console.log('Updating departments for:', university);
+                deptSelect.innerHTML = '<option value="">Select department</option>';
+                
+                if (!university || university === '__other__') {
+                    // Show all departments for "Other" university
+                    @foreach(($departments ?? collect()) as $dept)
+                        {
+                            const otherDeptOption = document.createElement('option');
+                            otherDeptOption.value = '{{ $dept->id }}';
+                            otherDeptOption.textContent = '{{ $dept->name }}';
+                            deptSelect.appendChild(otherDeptOption);
+                        }
+                    @endforeach
+                } else {
+                    // Show departments for selected university
+                    const uniData = universityData[university];
+                    if (uniData) {
+                        uniData.departments.forEach(function(dept) {
+                            const uniDeptOption = document.createElement('option');
+                            uniDeptOption.value = dept.id;
+                            uniDeptOption.textContent = dept.name;
+                            deptSelect.appendChild(uniDeptOption);
+                        });
+                    }
+                }
+                
+                // Clear courses when department changes
+                setCourseOptions([], '');
+            }
+
+            function updateCourses(university, deptId, preserveName) {
+                console.log('Updating courses for university:', university, 'department:', deptId);
+                
+                if (!university || university === '__other__') {
+                    // For "Other" university, use the original API method
+                    loadCoursesFromAPI(deptId, preserveName);
+                    return;
+                }
+                
+                const uniData = universityData[university];
+                if (!uniData) {
+                    setCourseOptions([], preserveName);
+                    return;
+                }
+                
+                const department = uniData.departments.find(d => d.id == deptId);
+                if (department) {
+                    setCourseOptions(department.courses, preserveName);
+                } else {
+                    setCourseOptions([], preserveName);
+                }
+            }
+
+            async function loadCoursesFromAPI(deptId, preserveName) {
+                if (!deptId) {
+                    setCourseOptions([], '');
+                    return;
+                }
+                try {
+                    const url = '{{ url("/departments") }}' + '/' + deptId + '/courses';
+                    console.log('Fetching courses from:', url);
+                    const res = await fetch(url, {
+                        method: 'GET',
+                        headers: {
+                            'Accept': 'application/json',
+                            'X-Requested-With': 'XMLHttpRequest',
+                        },
+                        credentials: 'same-origin',
+                    });
+                    
+                    if (!res.ok) {
+                        throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+                    }
+                    
+                    const contentType = res.headers.get('content-type');
+                    if (!contentType || !contentType.includes('application/json')) {
+                        const text = await res.text();
+                        console.error('Response is not JSON:', text.substring(0, 200));
+                        // Fallback: don't show error, just clear courses
+                        setCourseOptions([], preserveName);
+                        return;
+                    }
+                    
+                    const data = await res.json();
+                    console.log('Courses data:', data);
+                    const courseNames = data.map(c => c.name);
+                    setCourseOptions(courseNames, preserveName || '');
+                } catch (e) {
+                    console.error('Error loading courses:', e);
+                    setCourseOptions([], preserveName || '');
+                }
+            }
+
+            // University change event
+            uniSel.addEventListener('change', function () {
+                const selectedUniversity = uniSel.value;
+                updateDepartments(selectedUniversity);
+            });
+
+            // Department change event
+            deptSelect.addEventListener('change', function () {
+                const selectedUniversity = uniSel.value;
+                const selectedDeptId = deptSelect.value;
+                updateCourses(selectedUniversity, selectedDeptId, '');
+            });
+
+            // Initialize
+            if (initialDeptId) {
+                const selectedUniversity = uniSel.value;
+                updateDepartments(selectedUniversity);
+                deptSelect.value = String(initialDeptId);
+                updateCourses(selectedUniversity, initialDeptId, initialCourse);
+            } else if (initialCourse) {
+                setCourseOptions([], initialCourse);
+            }
+        })();
+        </script>
+    </div>
+
+    <!-- Lifestyle Preferences Section -->
+    <div class="bg-white shadow rounded-lg p-6 border-l-4 border-indigo-500" data-section="lifestyle">
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5">
+            <div class="flex items-center gap-3 min-w-0">
+                <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"></path>
+                    </svg>
+                </span>
+                <h2 class="text-lg font-semibold text-gray-900 leading-tight">Lifestyle Preferences</h2>
+            </div>
+            <span class="status-badge shrink-0 self-start sm:self-center">
+                @if($lifestyleComplete)
+                    <span class="profile-section-badge inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                        <svg class="w-3.5 h-3.5 shrink-0 text-green-600" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 0l-2 2a1 1 0 101.414 1.414L8.586 10l1.293 1.293a1 1 0 001.414 0z" clip-rule="evenodd"></path></svg>
+                        <span>Complete</span>
+                    </span>
+                @else
+                    <span class="profile-section-badge inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                        <svg class="w-3.5 h-3.5 shrink-0 text-red-600" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"></path></svg>
+                        <span>Incomplete</span>
+                    </span>
+                @endif
+            </span>
+        </div>
+
+        <form id="lifestyle-form" @submit.prevent="submitForm('lifestyle-form', '/profile/update-lifestyle', 'lifestyle')" class="space-y-4">
+            @csrf
+            
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label for="cleanliness_level" class="block text-sm font-medium text-gray-700">Cleanliness Level *</label>
+                    <select id="cleanliness_level" name="cleanliness_level" required
+                            class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                        <option value="">Select Cleanliness Level</option>
+                        <option value="very_messy" {{ old('cleanliness_level', $profile->cleanliness_level ?? '') == 'very_messy' ? 'selected' : '' }}>Very Messy</option>
+                        <option value="somewhat_messy" {{ old('cleanliness_level', $profile->cleanliness_level ?? '') == 'somewhat_messy' ? 'selected' : '' }}>Somewhat Messy</option>
+                        <option value="average" {{ old('cleanliness_level', $profile->cleanliness_level ?? '') == 'average' ? 'selected' : '' }}>Average</option>
+                        <option value="somewhat_clean" {{ old('cleanliness_level', $profile->cleanliness_level ?? '') == 'somewhat_clean' ? 'selected' : '' }}>Somewhat Clean</option>
+                        <option value="very_clean" {{ old('cleanliness_level', $profile->cleanliness_level ?? '') == 'very_clean' ? 'selected' : '' }}>Very Clean</option>
+                    </select>
+                </div>
+                
+                <div>
+                    <label for="sleep_pattern" class="block text-sm font-medium text-gray-700">Sleep Pattern *</label>
+                    <select id="sleep_pattern" name="sleep_pattern" required
+                            class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                        <option value="">Select Sleep Pattern</option>
+                        <option value="early_bird" {{ old('sleep_pattern', $profile->sleep_pattern ?? '') == 'early_bird' ? 'selected' : '' }}>Early bird</option>
+                        <option value="night_owl" {{ old('sleep_pattern', $profile->sleep_pattern ?? '') == 'night_owl' ? 'selected' : '' }}>Night owl</option>
+                        <option value="flexible" {{ old('sleep_pattern', $profile->sleep_pattern ?? '') == 'flexible' ? 'selected' : '' }}>Flexible</option>
+                    </select>
+                </div>
+            </div>
+            
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label for="study_habit" class="block text-sm font-medium text-gray-700">Study Habit *</label>
+                    <select id="study_habit" name="study_habit" required
+                            class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                        <option value="">Select Study Habit</option>
+                        <option value="intense" {{ old('study_habit', $profile->study_habit ?? '') == 'intense' ? 'selected' : '' }}>Intense</option>
+                        <option value="moderate" {{ old('study_habit', $profile->study_habit ?? '') == 'moderate' ? 'selected' : '' }}>Moderate</option>
+                        <option value="social" {{ old('study_habit', $profile->study_habit ?? '') == 'social' ? 'selected' : '' }}>Social</option>
+                        <option value="quiet" {{ old('study_habit', $profile->study_habit ?? '') == 'quiet' ? 'selected' : '' }}>Quiet</option>
+                    </select>
+                </div>
+                
+                <div>
+                    <label for="noise_tolerance" class="block text-sm font-medium text-gray-700">Noise Tolerance *</label>
+                    <select id="noise_tolerance" name="noise_tolerance" required
+                            class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                        <option value="">Select Noise Tolerance</option>
+                        <option value="quiet" {{ old('noise_tolerance', $profile->noise_tolerance ?? '') == 'quiet' ? 'selected' : '' }}>Quiet</option>
+                        <option value="moderate" {{ old('noise_tolerance', $profile->noise_tolerance ?? '') == 'moderate' ? 'selected' : '' }}>Moderate</option>
+                        <option value="loud" {{ old('noise_tolerance', $profile->noise_tolerance ?? '') == 'loud' ? 'selected' : '' }}>Loud</option>
+                    </select>
+                </div>
+            </div>
+            
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label for="budget_min" class="block text-sm font-medium text-gray-700">Minimum Budget (₱) *</label>
+                    <input type="number" id="budget_min" name="budget_min" value="{{ old('budget_min', $user->budget_min ?? '') }}" min="0" step="100" required
+                           class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                </div>
+                
+                <div>
+                    <label for="budget_max" class="block text-sm font-medium text-gray-700">Maximum Budget (₱) *</label>
+                    <input type="number" id="budget_max" name="budget_max" value="{{ old('budget_max', $user->budget_max ?? '') }}" min="0" step="100" required
+                           class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                </div>
+            </div>
+            
+            <div>
+                <label for="hobbies" class="block text-sm font-medium text-gray-700">Hobbies <span class="text-gray-400 font-normal">(optional)</span></label>
+                <input type="text" id="hobbies" name="hobbies[]" value="{{ $hobbiesForInput }}" 
+                       placeholder="e.g. Sports, Movies, Reading"
+                       class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                <p class="mt-1 text-sm text-gray-500">Separate multiple hobbies with commas.</p>
+            </div>
+            
+            <div>
+                <label for="lifestyle_tags" class="block text-sm font-medium text-gray-700">Lifestyle Tags <span class="text-gray-400 font-normal">(optional)</span></label>
+                <input type="text" id="lifestyle_tags" name="lifestyle_tags[]" value="{{ $tagsForInput }}" 
+                       placeholder="e.g. fitness, gaming, reading"
+                       class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                <p class="mt-1 text-sm text-gray-500">Separate multiple tags with commas.</p>
+            </div>
+            
+            <div class="flex justify-end">
+                <button type="submit" 
+                        class="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors duration-200">
+                    <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                    </svg>
+                    Save Lifestyle Preferences
+                </button>
+            </div>
+        </form>
+    </div>
+
+    <!-- Profile Completion Section with Dashboard Access -->
+    @if($completionPercentage >= 100)
+    <div class="bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 rounded-xl p-8 mb-8 shadow-lg">
+        <div class="text-center">
+            <div class="inline-flex items-center justify-center w-16 h-16 bg-green-500 rounded-full mb-4">
+                <svg class="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                </svg>
+            </div>
+            <h3 class="text-lg font-semibold text-green-800">Profile complete</h3>
+        </div>
+        <p class="text-green-700 mb-6 text-center max-w-xl mx-auto">Your profile is fully filled out. You can open your dashboard anytime.</p>
+        <div class="flex justify-center">
+            <a href="{{ route('dashboard') }}"
+               class="inline-flex items-center px-8 py-3 border border-transparent rounded-lg shadow-md text-base font-semibold text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors">
+                <svg class="w-5 h-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7 7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+                </svg>
+                Go to dashboard
+            </a>
+        </div>
+    </div>
+    @else
+    <div class="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-6 mb-8 shadow-lg">
+        <h3 class="text-lg font-semibold text-blue-800 text-center">Profile progress</h3>
+        <p class="text-blue-700 mb-6 text-center max-w-xl mx-auto">Your profile is {{ $completionPercentage }}% complete. Finish the sections above, then head to your dashboard when you are ready.</p>
+        <div class="flex justify-center">
+            <a href="{{ route('dashboard') }}"
+               class="inline-flex items-center px-6 py-3 border border-transparent rounded-lg shadow text-base font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors">
+                <svg class="w-5 h-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7 7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+                </svg>
+                Go to dashboard
+            </a>
+        </div>
+    </div>
+    @endif
+
+    <!-- Looking for Roommate Section (shown for all users at the bottom) -->
+    <div class="bg-white shadow rounded-lg p-6 border-l-4 border-indigo-500 mb-8" data-section="roommate_preferences">
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5">
+            <div class="flex items-center gap-3 min-w-0">
+                <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"></path>
+                    </svg>
+                </span>
+                <div>
+                    <h2 class="text-lg font-semibold text-gray-900 leading-tight">Looking for Roommate</h2>
+                    <p class="text-sm text-gray-500">Optional preferences for finding a roommate</p>
+                </div>
+            </div>
+            <span class="status-badge shrink-0 self-start sm:self-center">
+                @if($user->looking_for_roommate)
+                    <span class="profile-section-badge inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                        <svg class="w-3.5 h-3.5 shrink-0 text-green-600" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 0l-2 2a1 1 0 101.414 1.414L8.586 10l1.293 1.293a1 1 0 001.414 0z" clip-rule="evenodd"></path></svg>
+                        <span>Active</span>
+                    </span>
+                @else
+                    <span class="profile-section-badge inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
+                        <svg class="w-3.5 h-3.5 shrink-0 text-gray-500" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"></path></svg>
+                        <span>Inactive</span>
+                    </span>
+                @endif
+            </span>
+        </div>
+
+        @php
+            $roommatePrefs = $user->roommatePreference ?? new \App\Models\RoommatePreference();
+        @endphp
+
+        <form id="roommate-preferences-form" @submit.prevent="submitForm('roommate-preferences-form', '/profile/update-roommate-preferences', 'roommate_preferences')" class="space-y-6">
+            @csrf
+            
+            <!-- Toggle Switch -->
+            <div class="bg-gray-50 rounded-lg p-4">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <h3 class="text-sm font-medium text-gray-900">I am looking for a roommate</h3>
+                        <p class="text-sm text-gray-500">Enable this to let others know you're available</p>
+                    </div>
+                    <label class="relative inline-flex items-center cursor-pointer">
+                        <input type="checkbox" id="looking_for_roommate" name="looking_for_roommate" value="1" class="sr-only peer" {{ $user->looking_for_roommate ? 'checked' : '' }}>
+                        <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                    </label>
+                </div>
+            </div>
+
+            <div id="preferences-fields" class="space-y-4 transition-opacity duration-300">
+                <!-- User's Gender Display -->
+                <div class="bg-gray-50 rounded-lg p-3">
+                    <label class="block text-sm font-medium text-gray-700">Your Gender</label>
+                    <div class="mt-1 flex items-center">
+                        <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-800">
+                            <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path>
+                            </svg>
+                            {{ $user->gender ? ucfirst($user->gender) : 'Not specified' }}
+                        </span>
+                    </div>
+                    <p class="text-xs text-gray-500 mt-1">This is visible to other users</p>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label for="preferred_gender" class="block text-sm font-medium text-gray-700">Preferred Gender of Roommate</label>
+                        <select id="preferred_gender" name="preferred_gender" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                            <option value="no_preference" {{ $roommatePrefs->preferred_gender == 'no_preference' ? 'selected' : '' }}>No Preference</option>
+                            <option value="male" {{ $roommatePrefs->preferred_gender == 'male' ? 'selected' : '' }}>Male</option>
+                            <option value="female" {{ $roommatePrefs->preferred_gender == 'female' ? 'selected' : '' }}>Female</option>
+                            <option value="other" {{ $roommatePrefs->preferred_gender == 'other' ? 'selected' : '' }}>Other</option>
+                        </select>
+                    </div>
+                    
+                    <div>
+                        <label for="number_of_roommates" class="block text-sm font-medium text-gray-700">Number of Roommates Wanted</label>
+                        <select id="number_of_roommates" name="number_of_roommates" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                            <option value="1" {{ $roommatePrefs->number_of_roommates == '1' ? 'selected' : '' }}>1 Roommate</option>
+                            <option value="2" {{ $roommatePrefs->number_of_roommates == '2' ? 'selected' : '' }}>2 Roommates</option>
+                            <option value="3" {{ $roommatePrefs->number_of_roommates == '3' ? 'selected' : '' }}>3 Roommates</option>
+                            <option value="4+" {{ $roommatePrefs->number_of_roommates == '4+' ? 'selected' : '' }}>4+ Roommates</option>
+                            <option value="any" {{ $roommatePrefs->number_of_roommates == 'any' || !$roommatePrefs->number_of_roommates ? 'selected' : '' }}>Any Number</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label for="preferred_noise_level" class="block text-sm font-medium text-gray-700">Preferred Noise Level</label>
+                        <select id="preferred_noise_level" name="preferred_noise_level" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                            <option value="no_preference" {{ $roommatePrefs->preferred_noise_level == 'no_preference' ? 'selected' : '' }}>No Preference</option>
+                            <option value="very_quiet" {{ $roommatePrefs->preferred_noise_level == 'very_quiet' ? 'selected' : '' }}>Very Quiet</option>
+                            <option value="quiet" {{ $roommatePrefs->preferred_noise_level == 'quiet' ? 'selected' : '' }}>Quiet</option>
+                            <option value="moderate" {{ $roommatePrefs->preferred_noise_level == 'moderate' ? 'selected' : '' }}>Moderate</option>
+                            <option value="lively" {{ $roommatePrefs->preferred_noise_level == 'lively' ? 'selected' : '' }}>Lively</option>
+                        </select>
+                    </div>
+                    
+                    <div>
+                        <label for="preferred_location" class="block text-sm font-medium text-gray-700">Preferred Location</label>
+                        <input type="text" id="preferred_location" name="preferred_location" value="{{ $roommatePrefs->preferred_location }}" placeholder="e.g. Dagupan City" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm">
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="flex items-center cursor-pointer">
+                            <input type="checkbox" name="smoking_ok" value="1" {{ $roommatePrefs->smoking_ok ? 'checked' : '' }} class="rounded border-gray-300 text-indigo-600 shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+                            <span class="ml-2 text-sm text-gray-700">Smoking OK</span>
+                        </label>
+                    </div>
+                    
+                    <div>
+                        <label class="flex items-center cursor-pointer">
+                            <input type="checkbox" name="pets_ok" value="1" {{ $roommatePrefs->pets_ok ? 'checked' : '' }} class="rounded border-gray-300 text-indigo-600 shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+                            <span class="ml-2 text-sm text-gray-700">Pets OK</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="flex justify-end pt-4 border-t border-gray-200">
+                <button type="submit" class="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors duration-200">
+                    <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                    </svg>
+                    Save Roommate Preferences
+                </button>
+            </div>
+        </form>
+
+        <script>
+            document.addEventListener('DOMContentLoaded', function() {
+                const toggle = document.getElementById('looking_for_roommate');
+                const fields = document.getElementById('preferences-fields');
+                const statusBadge = document.querySelector('[data-section="roommate_preferences"] .status-badge');
+                
+                function updateStatusBadge(isActive) {
+                    if (!statusBadge) return;
+                    
+                    if (isActive) {
+                        statusBadge.innerHTML = `
+                            <span class="profile-section-badge inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                <svg class="w-3.5 h-3.5 shrink-0 text-green-600" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 0l-2 2a1 1 0 101.414 1.414L8.586 10l1.293 1.293a1 1 0 001.414 0z" clip-rule="evenodd"></path></svg>
+                                <span>Active</span>
+                            </span>
+                        `;
+                    } else {
+                        statusBadge.innerHTML = `
+                            <span class="profile-section-badge inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
+                                <svg class="w-3.5 h-3.5 shrink-0 text-gray-500" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"></path></svg>
+                                <span>Inactive</span>
+                            </span>
+                        `;
+                    }
+                }
+                
+                function updateFieldsState(isActive) {
+                    // Fields are always functional now
+                }
+                
+                if (toggle && fields) {
+                    // Initialize state on page load
+                    const isActive = toggle.checked;
+                    
+                    // Fields are always active and functional
+                    
+                    toggle.addEventListener('change', function() {
+                        const isActive = this.checked;
+                        updateFieldsState(isActive);
+                        updateStatusBadge(isActive);
+                    });
+                }
+            });
+        </script>
+    </div>
+
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const departmentSelect = document.getElementById('department');
+    const courseSelect = document.getElementById('course');
+    
+    if (departmentSelect && courseSelect) {
+        departmentSelect.addEventListener('change', function() {
+            const departmentId = this.value;
+            courseSelect.innerHTML = '<option value="">Select Course</option>';
+            
+            if (departmentId) {
+                fetch(`/departments/${departmentId}/courses`)
+                    .then(response => response.json())
+                    .then(courses => {
+                        courses.forEach(course => {
+                            const option = document.createElement('option');
+                            option.value = course.id;
+                            option.textContent = course.name;
+                            courseSelect.appendChild(option);
+                        });
+                    })
+                    .catch(error => console.error('Error fetching courses:', error));
+            }
+        });
+    }
+});
+
+// Avatar Preview Functionality
+document.addEventListener('DOMContentLoaded', function() {
+    const avatarInput = document.getElementById('avatar');
+    const mainAvatar = document.getElementById('main-avatar');
+    const uploadStatus = document.getElementById('upload-status');
+    const clearButton = document.getElementById('clear-avatar');
+    
+    if (avatarInput && mainAvatar && uploadStatus) {
+        avatarInput.addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                // Validate file size (5MB max)
+                if (file.size > 5 * 1024 * 1024) {
+                    alert('File size must be less than 5MB');
+                    e.target.value = '';
+                    uploadStatus.textContent = 'No file selected';
+                    return;
+                }
+                
+                // Validate file type
+                const allowedTypes = ['image/jpeg', 'image/png', 'image/jpg', 'image/gif', 'image/webp'];
+                if (!allowedTypes.includes(file.type)) {
+                    alert('Please select a valid image file (JPG, PNG, GIF, or WebP)');
+                    e.target.value = '';
+                    uploadStatus.textContent = 'No file selected';
+                    return;
+                }
+                
+                // Update main avatar immediately
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    mainAvatar.src = e.target.result;
+                    uploadStatus.textContent = `Selected: ${file.name}`;
+                    uploadStatus.className = 'text-sm text-green-600 font-medium';
+                };
+                reader.readAsDataURL(file);
+            } else {
+                uploadStatus.textContent = 'No file selected';
+                uploadStatus.className = 'text-sm text-gray-600';
+            }
+        });
+    }
+});
+
+// Clear Avatar Selection Function
+function clearAvatarSelection() {
+    const avatarInput = document.getElementById('avatar');
+    const mainAvatar = document.getElementById('main-avatar');
+    const uploadStatus = document.getElementById('upload-status');
+    
+    if (avatarInput) {
+        avatarInput.value = '';
+    }
+    
+    // Reset to original avatar
+    const originalAvatar = mainAvatar.getAttribute('data-original') || 
+        'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iMTIiIGZpbGw9IiNGM0Y0RjYiLz4KPHN2ZyB3aWR0aD0iMjQiIGhlaWdodD0iMjQiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZmlsbC1ydWxlPSJldmVub2RkIiBjbGlwLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik0xNiA3YTQgNCAwIDExLTggMCA0IDQgMCAwMTggMFpNMTIgMTRhNyA3IDAgMDAtNyA3aDE0YTcgNyAwIDAwLTctN1oiIGZpbGw9IiM5Q0EzQUYiLz4KPC9zdmc+';
+    
+    mainAvatar.src = originalAvatar;
+    
+    if (uploadStatus) {
+        uploadStatus.textContent = 'No file selected';
+        uploadStatus.className = 'text-sm text-gray-600';
+    }
+}
+
+// Store original avatar on page load
+document.addEventListener('DOMContentLoaded', function() {
+    const mainAvatar = document.getElementById('main-avatar');
+    if (mainAvatar) {
+        mainAvatar.setAttribute('data-original', mainAvatar.src);
+    }
+});
+
+// Handle successful avatar upload
+function handleAvatarSuccess(data) {
+    if (data.success && data.avatar_url) {
+        // Update the main avatar with the new uploaded image
+        const mainAvatar = document.getElementById('main-avatar');
+        if (mainAvatar) {
+            mainAvatar.src = data.avatar_url;
+            mainAvatar.setAttribute('data-original', data.avatar_url);
+        }
+        
+        // Update status
+        const uploadStatus = document.getElementById('upload-status');
+        if (uploadStatus) {
+            uploadStatus.textContent = 'Avatar saved successfully!';
+            uploadStatus.className = 'text-sm text-green-600 font-medium';
+        }
+        
+        // Clear file input
+        const avatarInput = document.getElementById('avatar');
+        if (avatarInput) {
+            avatarInput.value = '';
+        }
+        
+        // Update profile photo section status
+        updateProfilePhotoStatus(true);
+    }
+}
+
+// Update profile photo section completion status
+function updateProfilePhotoStatus(hasAvatar) {
+    const profilePhotoSection = document.querySelector('[data-section="profile_photo"]');
+    if (profilePhotoSection) {
+        const statusBadge = profilePhotoSection.querySelector('.status-badge span');
+        if (statusBadge) {
+            if (hasAvatar) {
+                statusBadge.className = 'profile-section-badge inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800';
+                statusBadge.innerHTML = '<svg class="w-3.5 h-3.5 shrink-0 text-green-600" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 0l-2 2a1 1 0 101.414 1.414L8.586 10l1.293 1.293a1 1 0 001.414 0z" clip-rule="evenodd"></path></svg><span>Complete</span>';
+            } else {
+                statusBadge.className = 'profile-section-badge inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800';
+                statusBadge.innerHTML = '<svg class="w-3.5 h-3.5 shrink-0 text-red-600" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"></path></svg><span>Incomplete</span>';
+            }
+        }
+    }
+}
+</script>
