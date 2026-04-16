@@ -12,6 +12,9 @@ COPY . .
 
 RUN composer install
 
+RUN php artisan key:generate || true
+RUN php artisan config:clear || true
+RUN php artisan cache:clear || true
 # Fix permissions
 RUN chmod -R 775 storage bootstrap/cache
 
