@@ -15,11 +15,6 @@ RUN composer install
 # Fix permissions
 RUN chmod -R 775 storage bootstrap/cache
 
-# Laravel cache fix
-RUN php artisan config:clear
-RUN php artisan cache:clear
-RUN php artisan config:cache
-
 EXPOSE 10000
 
 CMD php -S 0.0.0.0:10000 -t public
